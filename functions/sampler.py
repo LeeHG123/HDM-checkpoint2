@@ -105,12 +105,10 @@ def sampler_srk(x, model, sde, device, W, eps, dataset, steps=1000, sampler_inpu
     Stochastic Runge-Kutta sampler using torchsde
     """
     class ScoreBasedSDE(torch.nn.Module):
-        def __init__(self, model, sde, W, sampler_input):
+        def __init__(self, model, sde):
             super().__init__()
             self.model = model
             self.sde = sde
-            self.W = W
-            self.sampler_input = sampler_input
             self.noise_type = "diagonal"
             self.sde_type = "ito"
 
@@ -137,7 +135,7 @@ def sampler_srk(x, model, sde, device, W, eps, dataset, steps=1000, sampler_inpu
             return torch.sqrt(beta_t)[:, None].to(y.device) * torch.ones_like(y)
 
     # Create SDE instance
-    sde_instance = ScoreBasedSDE(model, sde, W, sampler_input)
+    sde_instance = ScoreBasedSDE(model, sde)
     
     # Time points (forward time for torchsde)
     ts = torch.linspace(eps, sde.T, steps + 1).to(device)
@@ -174,7 +172,15 @@ def sampler_srk(x, model, sde, device, W, eps, dataset, steps=1000, sampler_inpu
     
     with torch.no_grad():
         # Use torchsde's SRK solver with forward time
-        ys = torchsde.sdeint(reverse_sde, x, ts, method='srk', dt=1e-3, adaptive=True)
+        total_noise_increment = W.sample(x.shape).to(device) * (sde.T - eps)**0.5
+        bm_interval = torchsde.BrownianInterval(
+            t0=eps,
+            t1=sde.T,
+            size=x.shape,
+            W=total_noise_increment,
+            levy_area_approximation='space-time'
+        )
+        ys = torchsde.sdeint(reverse_sde, x, ts, method='srk', dt=1e-3, adaptive=True, bm=bm_interval)
         x = ys[-1]
         
         # Gradient clipping for stability
